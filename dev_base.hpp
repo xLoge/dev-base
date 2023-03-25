@@ -52,7 +52,7 @@ namespace db
 
 	// * constexpr memchr for any type of char but reversed
 	template <class Ty>
-	constexpr inline const Ty* rmemchr(const Ty* _str, const Ty _ch, std::size_t _len)
+	constexpr inline const Ty* raw_rmemchr(const Ty* _str, const Ty _ch, const std::size_t _len)
 	{
 		const Ty* _end = _str;
 		_str += _len;
@@ -62,6 +62,13 @@ namespace db
 			}
 		}
 		return nullptr;
+	}
+
+	// * constexpr memchr for any type of char but reversed
+	template <class Ty>
+	constexpr inline const Ty* rmemchr(const Ty* _str, const Ty _ch, const std::size_t _len)
+	{
+		return db::raw_rmemchr(_str, _ch, _len);
 	}
 
 	template <class Ty>
@@ -91,63 +98,33 @@ namespace db
 // STRING OPERATIONS
 namespace db
 {
-	// * constexpr strlen base for any char type
+	// * fast strlen version I wrote with simd instructions
 	template <class char_type>
-	constexpr inline std::size_t raw_strlen(const char_type* _begin) noexcept
-	{
-		const char_type* end = _begin;
-		for (; *end; ++end);
-		return (end - _begin);
-	}
-
-	// * constexpr strlen for any type of char
-	template <class char_type>
-	constexpr inline std::size_t strlen(const char_type* _begin)
-	{
-		if constexpr(std::is_same_v<char, char_type>
-#ifdef	__cpp_char8_t
-			|| std::is_same_v<char8_t, char_type>) {
-#else
-			) {
-#endif 
-			return std::strlen(reinterpret_cast<const char*>(_begin));
-		}
-
-		if constexpr(std::is_same_v<wchar_t, char_type> || std::is_same_v<char16_t, char_type>) {
-			return std::wcslen(reinterpret_cast<const wchar_t*>(_begin));
-		}
-
-		if constexpr(std::is_same_v<char32_t, char_type>) {
-			return db::raw_strlen<char32_t>(_begin);
-		}
-
-		throw std::invalid_argument("no type of char specified.");
-	}
-
-	// * fast strlen version I wrote with mmx instructions
-	template <class char_type>
-	inline std::size_t fast_strlen_mmx(const char_type* _begin)
+	inline std::size_t fast_strlen_simd(const char_type* _begin)
 	{
 		constexpr std::uint32_t skip_32 = 32U / sizeof(char_type);
 		constexpr std::uint32_t skip_16 = 16U / sizeof(char_type);
 
 		const char_type* end = _begin;
-		std::int32_t mask;
 
 		// skip big chunks
 		for (;;) {
-			const __m256i zero256 = _mm256_set1_epi8(0);
-			if (!(mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(*reinterpret_cast<const __m256i*>(end), zero256)))) {
-				end += skip_32;
-			}
-			else {
+			if (
+				_mm256_movemask_epi8(
+				_mm256_cmpeq_epi8(*reinterpret_cast<const __m256i*>(end), _mm256_set1_epi8(0))
+				)) 
+			{
 				break;
 			}
+			end += skip_32;
 		}
 
 		// skip last mid chunk
-		const __m128i zero128 = _mm_set1_epi8(0);
-		if (!(mask = _mm_movemask_epi8(_mm_cmpeq_epi8(*reinterpret_cast<const __m128i*>(end), zero128)))) {
+		if (
+			!_mm_movemask_epi8(
+				_mm_cmpeq_epi8(*reinterpret_cast<const __m128i*>(end), _mm_set1_epi8(0))
+			)) 
+		{
 			end += skip_16;
 		}
 
@@ -161,15 +138,13 @@ namespace db
 	template <class char_type>
 	constexpr inline std::size_t fast_strlen(const char_type* _begin)
 	{
-		constexpr std::size_t mask_high = 0x8080808080808080ULL;
-		constexpr std::size_t mask_low  = 0x0101010101010101ULL;
+		constexpr std::size_t mask_high = static_cast<std::size_t>(0x8080808080808080U); // Works for X64 and X86
+		constexpr std::size_t mask_low  = static_cast<std::size_t>(0x0101010101010101U);
 		const std::size_t* aligned_end = reinterpret_cast<const std::size_t*>(_begin);
 		const char_type* end = _begin;
 
-		// Check 8 bytes at once without mmx instructions
-		std::size_t data;
-		
-		while (true) {
+		// Check 8 bytes at once without simd instructions
+		for (std::size_t data;;) {
 			data = *aligned_end++;
 			if ((data - mask_low) & (~data) & mask_high) {
 				break;
@@ -181,6 +156,39 @@ namespace db
 		for (; *end != char_type(); ++end);
 
 		return static_cast<std::size_t>(end - _begin);
+	}
+
+	// * constexpr strlen base for any char type
+	template <class char_type>
+	constexpr inline std::size_t raw_strlen(const char_type* _begin) noexcept
+	{
+		const char_type* end = _begin;
+		for (; *end; ++end);
+		return (end - _begin);
+	}
+
+	// * constexpr strlen for any type of char
+	template <class char_type>
+	constexpr inline std::size_t strlen(const char_type* _begin)
+	{
+		if constexpr (std::is_same_v<char, char_type>
+#ifdef	__cpp_char8_t
+			|| std::is_same_v<char8_t, char_type>) {
+#else
+			) {
+#endif 
+			return std::strlen(reinterpret_cast<const char*>(_begin));
+		}
+
+		if constexpr (std::is_same_v<wchar_t, char_type> || std::is_same_v<char16_t, char_type>) {
+			return std::wcslen(reinterpret_cast<const wchar_t*>(_begin));
+		}
+
+		if constexpr (std::is_same_v<char32_t, char_type>) {
+			return db::raw_strlen<char32_t>(_begin);
+		}
+
+		throw std::invalid_argument("no type of char specified.");
 	}
 
 	// * guesses base of numeric string
@@ -251,9 +259,8 @@ namespace db
 	constexpr inline To to_signed(const From _num) noexcept
 	{
 		constexpr bool is_unsigned = std::is_unsigned_v<From>;
-
 #if _HAS_CXX17
-		if constexpr (is_unsigned) {
+		if constexpr(is_unsigned) {
 #else 
 		if (is_unsigned) {
 #endif
@@ -261,9 +268,9 @@ namespace db
 		}
 
 		return _num;
-		}
+	}
 
-	// * inverse square root function
+	// * inverse square root using mmx instructions
 	inline float inv_sqrt(const float _val)
 	{
 		__m128 invsqrt = _mm_set_ss(_val);
