@@ -1,16 +1,44 @@
-#include <stdint.h>
 #include <vector>
+#include <cstring>
 #include <string>
-#include <immintrin.h>
-#include <algorithm>
 #include <utility>
 #include <iterator>
+#include <type_traits>
+#include <immintrin.h>
+
+// DATA TYPES
+namespace db
+{
+	typedef signed char int8_t;
+	typedef unsigned char uint8_t;
+
+	typedef signed short int16_t;
+	typedef unsigned short uint16_t;
+
+	typedef signed int int32_t;
+	typedef unsigned int uint32_t;
+
+	typedef signed long long int64_t;
+	typedef unsigned long long uint64_t;
+
+	typedef unsigned long long size_t;
+
+	template<bool Test, class If_Test, class Else>
+	struct enable_if_else {
+		using type = Else;
+	};
+
+	template <class If_Test, class Else>
+	struct enable_if_else<true, If_Test, Else> {
+		using type = If_Test;
+	};
+}
 
 // MEM OPERATIONS
 namespace db
 {
 	template <class Ty>
-	constexpr inline Ty* raw_memcpy(Ty* _dst, const Ty* _src, std::size_t _size) noexcept
+	constexpr inline Ty* raw_memcpy(Ty* _dst, const Ty* _src, db::size_t _size) noexcept
 	{
 		while (_size--) { *_dst++ = *_src++; }
 		return _dst;
@@ -18,7 +46,7 @@ namespace db
 
 	// * constexpr memcpy for any type of char
 	template <class Ty>
-	constexpr inline Ty* memcpy(Ty* _dst, const Ty* const _src, std::size_t _size) noexcept
+	constexpr inline Ty* memcpy(Ty* _dst, const Ty* const _src, const db::size_t _size) noexcept
 	{
 		if (std::is_constant_evaluated()) {
 			return db::raw_memcpy<Ty>(_dst, _src, _size);
@@ -29,7 +57,7 @@ namespace db
 	}
 
 	template <class Ty>
-	constexpr inline std::int32_t raw_memcmp(const Ty* const _buff1, const Ty* const _buff2, std::size_t _size) noexcept
+	constexpr inline db::int32_t raw_memcmp(const Ty* const _buff1, const Ty* const _buff2, db::size_t _size) noexcept
 	{
 		for (; 0 < _size; ++_buff1, ++_buff2, --_size) {
 			if (*_buff1 != *_buff2) {
@@ -40,7 +68,7 @@ namespace db
 	}
 
 	template <class Ty>
-	constexpr inline std::int32_t memcmp(const Ty* const _buff1, const Ty* const _buff2, std::size_t _size) noexcept
+	constexpr inline db::int32_t memcmp(const Ty* const _buff1, const Ty* const _buff2, db::size_t _size) noexcept
 	{
 		if (std::is_constant_evaluated()) {
 			return db::raw_memcmp(_buff1, _buff2, _size);
@@ -52,7 +80,7 @@ namespace db
 
 	// * constexpr memchr for any type of char but reversed
 	template <class Ty>
-	constexpr inline const Ty* raw_rmemchr(const Ty* _str, const Ty _ch, const std::size_t _len)
+	constexpr inline const Ty* raw_rmemchr(const Ty* _str, const Ty _ch, const db::size_t _len)
 	{
 		const Ty* _end = _str;
 		_str += _len;
@@ -66,13 +94,13 @@ namespace db
 
 	// * constexpr memchr for any type of char but reversed
 	template <class Ty>
-	constexpr inline const Ty* rmemchr(const Ty* _str, const Ty _ch, const std::size_t _len)
+	constexpr inline const Ty* rmemchr(const Ty* _str, const Ty _ch, const db::size_t _len)
 	{
 		return db::raw_rmemchr(_str, _ch, _len);
 	}
 
 	template <class Ty>
-	constexpr inline const Ty* raw_memchr(const Ty* _str, const Ty _ch, const std::size_t _maxlen) noexcept
+	constexpr inline const Ty* raw_memchr(const Ty* _str, const Ty _ch, const db::size_t _maxlen) noexcept
 	{
 		while (*_str) {
 			if (*_str++ == _ch) {
@@ -84,7 +112,7 @@ namespace db
 
 	// * constexpr memchr for any type of char
 	template <class Ty>
-	constexpr inline const Ty* memchr(const Ty* _str, const Ty _ch, const std::size_t _maxlen) noexcept
+	constexpr inline const Ty* memchr(const Ty* _str, const Ty _ch, const db::size_t _maxlen) noexcept
 	{
 		if (std::is_constant_evaluated()) {
 			return db::raw_memchr<Ty>(_str, _ch, _maxlen);
@@ -100,51 +128,55 @@ namespace db
 {
 	// * fast strlen version I wrote with simd instructions
 	template <class char_type>
-	inline std::size_t fast_strlen_simd(const char_type* _begin)
+	inline db::size_t fast_strlen_simd(const char_type* _begin)
 	{
-		constexpr std::uint32_t skip_32 = 32U / sizeof(char_type);
-		constexpr std::uint32_t skip_16 = 16U / sizeof(char_type);
-
 		const char_type* end = _begin;
 
-		// skip big chunks
+		// skip 32 byte chunks
 		for (;;) {
-			if (
-				_mm256_movemask_epi8(
-				_mm256_cmpeq_epi8(*reinterpret_cast<const __m256i*>(end), _mm256_set1_epi8(0))
-				)) 
+			if (_mm256_movemask_epi8(
+					_mm256_cmpeq_epi8(*reinterpret_cast<const __m256i*>(end), _mm256_set1_epi8(0))
+				))
 			{
 				break;
 			}
-			end += skip_32;
+			end += 32U / sizeof(char_type);
 		}
 
-		// skip last mid chunk
-		if (
-			!_mm_movemask_epi8(
+		//skip last 16 byte chunk
+		if (!_mm_movemask_epi8(
 				_mm_cmpeq_epi8(*reinterpret_cast<const __m128i*>(end), _mm_set1_epi8(0))
-			)) 
+			))
 		{
-			end += skip_16;
+			end += 16U / sizeof(char_type);
+		}
+
+		// skip last 8 byte chunk 
+		constexpr db::size_t mask_high = static_cast<db::size_t>(0x8080808080808080U); // Works for X64 and X86
+		constexpr db::size_t mask_low = static_cast<db::size_t>(0x0101010101010101U);
+		const db::size_t data = *reinterpret_cast<const db::size_t*>(end);
+		
+		if (((data - mask_low) & (~data) & mask_high) == 0) {
+			end += 8U / sizeof(char_type);
 		}
 
 		// count rest one by one
-		for (;*end != char_type(); ++end);
+		for (; *end != char_type(); ++end);
 
-		return static_cast<std::size_t>(end - _begin);
+		return static_cast<db::size_t>(end - _begin);
 	}
 
 	// * fast strlen version I wrote
 	template <class char_type>
-	constexpr inline std::size_t fast_strlen(const char_type* _begin)
+	constexpr inline db::size_t fast_strlen(const char_type* _begin)
 	{
-		constexpr std::size_t mask_high = static_cast<std::size_t>(0x8080808080808080U); // Works for X64 and X86
-		constexpr std::size_t mask_low  = static_cast<std::size_t>(0x0101010101010101U);
-		const std::size_t* aligned_end = reinterpret_cast<const std::size_t*>(_begin);
+		constexpr db::size_t mask_high = static_cast<db::size_t>(0x8080808080808080U); // Works for X64 and X86
+		constexpr db::size_t mask_low  = static_cast<db::size_t>(0x0101010101010101U);
+		const db::size_t* aligned_end = reinterpret_cast<const db::size_t*>(_begin);
 		const char_type* end = _begin;
 
 		// Check 8 bytes at once without simd instructions
-		for (std::size_t data;;) {
+		for (db::size_t data;;) {
 			data = *aligned_end++;
 			if ((data - mask_low) & (~data) & mask_high) {
 				break;
@@ -155,12 +187,12 @@ namespace db
 		// Count rest one by one
 		for (; *end != char_type(); ++end);
 
-		return static_cast<std::size_t>(end - _begin);
+		return static_cast<db::size_t>(end - _begin);
 	}
 
 	// * constexpr strlen base for any char type
 	template <class char_type>
-	constexpr inline std::size_t raw_strlen(const char_type* _begin) noexcept
+	constexpr inline db::size_t raw_strlen(const char_type* _begin) noexcept
 	{
 		const char_type* end = _begin;
 		for (; *end; ++end);
@@ -169,7 +201,7 @@ namespace db
 
 	// * constexpr strlen for any type of char
 	template <class char_type>
-	constexpr inline std::size_t strlen(const char_type* _begin)
+	constexpr inline db::size_t strlen(const char_type* _begin)
 	{
 		if constexpr (std::is_same_v<char, char_type>
 #ifdef	__cpp_char8_t
@@ -193,7 +225,7 @@ namespace db
 
 	// * guesses base of numeric string
 	template <class char_type>
-	constexpr inline std::uint16_t guess_base(const char_type* _str) noexcept
+	constexpr inline db::uint16_t guess_base(const char_type* _str) noexcept
 	{
 		if (_str[1] == 'x' || _str[1] == 'X') {
 			return 16;
@@ -255,7 +287,7 @@ namespace db
 		}
 
 	// * Unsigned to Signed number
-	template <class To = std::int64_t, class From>
+	template <class To = db::int64_t, class From>
 	constexpr inline To to_signed(const From _num) noexcept
 	{
 		constexpr bool is_unsigned = std::is_unsigned_v<From>;
@@ -270,12 +302,171 @@ namespace db
 		return _num;
 	}
 
-	// * inverse square root using mmx instructions
-	inline float inv_sqrt(const float _val)
+	// * square root using simd instruction
+	inline double sqrt_simd(const double _val) noexcept
 	{
-		__m128 invsqrt = _mm_set_ss(_val);
-		invsqrt = _mm_rsqrt_ss(invsqrt);
-		return _mm_cvtss_f32(invsqrt);
+		const auto val = _mm_sqrt_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * inverse square root using simd instruction
+	inline float inv_sqrt_simd(const float _val) noexcept
+	{
+		const auto val = _mm_rsqrt_ss(_mm_set_ss(_val));
+		return _mm_cvtss_f32(val);
+	}
+
+	// * pow using simd instruction
+	inline double pow_simd(const double _base, const double _expo) noexcept
+	{
+		const auto val = _mm_pow_pd(_mm_set_sd(_base), _mm_set_sd(_expo));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * pow mod using simd instructions
+	inline double powm_simd(const double _base, const double _expo, const double _mod) noexcept
+	{
+		const auto val = _mm_fmod_pd(
+			_mm_pow_pd(_mm_set_sd(_base), _mm_set_sd(_expo)),
+			_mm_set_sd(_mod));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * atan using simd instruction
+	inline double atan_simd(const double _X) noexcept
+	{
+		const auto val = _mm_atan_pd(_mm_set_sd(_X));
+		return _mm_cvtsd_f64(val);
+	}
+	
+	// * atan2 using simd instruction
+	inline double atan2_simd(const double _X, const double _Y) noexcept
+	{
+		const auto val = _mm_atan2_pd(_mm_set_sd(_X), _mm_set_sd(_Y));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * sin using simd instruction
+	inline double sin_simd(const double _val) noexcept
+	{
+		const auto val = _mm_sin_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * cos using simd instruction
+	inline double cos_simd(const double _val) noexcept
+	{
+		const auto val = _mm_cos_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * tan using simd instruction
+	inline double tan_simd(const double _val) noexcept
+	{
+		const auto val = _mm_tan_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * tand using simd instruction
+	inline double tand_simd(const double _val) noexcept
+	{
+		const auto val = _mm_tand_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * tanh using simd instruction
+	inline double tanh_simd(const double _val) noexcept
+	{
+		const auto val = _mm_tanh_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * acos using simd instruction
+	inline double acos_simd(const double _val) noexcept
+	{
+		const auto val = _mm_acos_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * asin using simd instruction
+	inline double asin_simd(const double _val) noexcept
+	{
+		const auto val = _mm_asin_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+	
+	// * hypot using simd instruction
+	inline double hypot_simd(const double _X, const double _Y) noexcept
+	{
+		const auto val = _mm_hypot_pd(_mm_set_sd(_X), _mm_set_sd(_Y));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * log using simd instruction
+	inline double log_simd(const double _val) noexcept
+	{
+		const auto val = _mm_log_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * log2 using simd instruction
+	inline double log2_simd(const double _val) noexcept
+	{
+		const auto val = _mm_log2_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	// * log10 using simd instruction
+	inline double log10_simd(const double _val) noexcept
+	{
+		const auto val = _mm_log10_pd(_mm_set_sd(_val));
+		return _mm_cvtsd_f64(val);
+	}
+
+	template<class Base, class Expo>
+	constexpr inline auto pow(Base _base, Expo _expo)
+	{
+		using result = db::enable_if_else <std::is_integral_v<Base>,
+			typename db::enable_if_else<std::is_unsigned_v<Base>,
+			db::uint64_t,
+			db::int64_t>::type,
+			Base
+		>::type;
+
+		result res = 1;
+
+		while (_expo > 0) {
+			if (_expo & 1) {
+				res *= _base;
+			}
+			_base *= _base;
+			_expo >>= 1;
+		}
+
+		return res;
+	}
+
+	template<class Base, class Expo, class Mod>
+	constexpr inline auto powm(Base _base, Expo _expo, const Mod& _mod)
+	{
+		using result = db::enable_if_else <std::is_integral_v<Base>,
+			typename db::enable_if_else<std::is_unsigned_v<Base>,
+			db::uint64_t,
+			db::int64_t>::type,
+			Base
+		>::type;
+
+		result res = 1;
+
+		while (_expo > 0) {
+			if (_expo & 1) {
+				res = (res * _base) % _mod;
+			}
+			_base = (_base * _base) % _mod;
+			_expo >>= 1;
+		}
+
+		return res;
 	}
 }
 
@@ -283,7 +474,7 @@ namespace db
 namespace db
 {
 	// * Floatingpoint to string
-	template <std::size_t _PRECISION = 5, class char_type = char, class Ty = float>
+	template <db::size_t _PRECISION = 5, class char_type = char, class Ty = float>
 	constexpr inline std::basic_string<char_type> ftos(Ty _num)
 	{
 		char_type buff[21 + _PRECISION];
@@ -301,7 +492,7 @@ namespace db
 		_num = (tmp_num >= 0.5 ? (tmp_num + 1.0) : tmp_num) * prec1;
 
 		// Get first number
-		std::size_t first = static_cast<std::size_t>(_num);
+		db::size_t first = static_cast<db::size_t>(_num);
 		_num -= first;
 		_num *= 10.0;
 
@@ -318,22 +509,22 @@ namespace db
 		if (_num) {
 			*begin++ = '.';
 
-			std::size_t maxlen = _PRECISION;
+			db::size_t maxlen = _PRECISION;
 
 			while (_num && maxlen--)
 			{
-				first = static_cast<std::size_t>(_num);
+				first = static_cast<db::size_t>(_num);
 				_num -= first;
 				_num *= 10.0;
 				*begin++ = static_cast<char_type>(first + '0');
 			}
 		}
 
-		return std::basic_string<char_type>(buff, static_cast<std::size_t>(begin - buff));
+		return std::basic_string<char_type>(buff, static_cast<db::size_t>(begin - buff));
 	}
 
 	// * Number to binary string
-	template <class char_type = char, class Ty = std::int32_t, bool FULL_OUTPUT = true>
+	template <class char_type = char, class Ty = db::int32_t, bool FULL_OUTPUT = true>
 	constexpr inline std::basic_string<char_type> ntobs(const Ty _num) noexcept
 	{
 		constexpr auto can_negative = !std::is_unsigned_v<Ty>;
@@ -354,7 +545,7 @@ namespace db
 		auto num = db::to_unsigned(_num);
 
 		if constexpr (FULL_OUTPUT) {
-			for (std::int32_t i = 0; i != buff_size - can_negative; ++i) {
+			for (db::int32_t i = 0; i != buff_size - can_negative; ++i) {
 				*--begin = (num & 1) + '0';
 				num /= 2;
 			}
@@ -371,10 +562,10 @@ namespace db
 	}
 
 	// * Number to decimal string
-	template <class char_type = char, class Ty = std::int32_t>
+	template <class char_type = char, class Ty = db::int32_t>
 	constexpr inline std::basic_string<char_type> ntods(const Ty _num) noexcept
 	{
-		constexpr static auto digits2 = [](const std::size_t _num) noexcept -> const char* const
+		constexpr static auto digits2 = [](const db::size_t _num) noexcept -> const char* const
 		{
 			return &"0001020304050607080910111213141516171819"
 				"2021222324252627282930313233343536373839"
@@ -391,7 +582,7 @@ namespace db
 		const bool is_negative = _num < 0;
 
 		auto num = db::to_unsigned(_num);
-		std::uint8_t tmp;
+		db::uint8_t tmp;
 
 		while (num >= 100) {
 			tmp = num % 100;
@@ -413,7 +604,7 @@ namespace db
 	}
 
 	// * Number to Hex string
-	template <class char_type = char, class Ty = std::int32_t>
+	template <class char_type = char, class Ty = db::int32_t>
 	constexpr inline std::basic_string<char_type> ntohs(const Ty _num) noexcept
 	{
 		constexpr auto can_negative = !std::is_unsigned_v<Ty>;
@@ -425,7 +616,7 @@ namespace db
 		const bool is_negative = _num < 0;
 
 		auto num = db::to_unsigned(_num);
-		std::uint8_t tmp;
+		db::uint8_t tmp;
 
 		while (num) {
 			tmp = num % 16;
@@ -457,14 +648,14 @@ namespace db
 	constexpr inline double fstod(const char_type* _str)
 	{
 		const bool is_negative = (*_str == '-' ? ++_str : false);
-		const std::size_t _len = db::strlen(_str);
+		const db::size_t _len = db::strlen(_str);
 
 		bool has_point = false;
-		std::uint8_t current;
+		db::uint8_t current;
 		std::double_t num = 0.0;
-		std::size_t len = _len;
+		db::size_t len = _len;
 
-		while (static_cast<std::uint32_t>(is_negative) != len--) {
+		while (static_cast<db::uint32_t>(is_negative) != len--) {
 			current = _str[len];
 
 			if (current == '.') {
@@ -479,9 +670,9 @@ namespace db
 		}
 
 		if (has_point) {
-			std::size_t before = 0;
+			db::size_t before = 0;
 
-			for (std::size_t i = 0; i != len; ++i) {
+			for (db::size_t i = 0; i != len; ++i) {
 				current = _str[i];
 				before += (current - '0');
 				before *= 10;
@@ -493,38 +684,38 @@ namespace db
 			num += before;
 		}
 		else {
-			num = static_cast<std::size_t>(num * std::pow(10, _len));
+			num = static_cast<db::size_t>(num * std::pow(10, _len));
 		}
 
 		return num;
 	}
 
 	// * Binary string to number
-	template <class Ty = std::size_t>
-	constexpr inline Ty bston(const char* const _str, const bool _big_endian = true)
+	template <class Ty = db::size_t, class char_type>
+	constexpr inline Ty bston(const char_type* const _str, const bool _big_endian = true)
 	{
 		constexpr auto can_negative = !std::is_unsigned_v<Ty>;
 		constexpr auto num_max = std::numeric_limits<Ty>::max();
-		const std::size_t _len = db::strlen(_str);
+		const db::size_t _len = db::strlen(_str);
 
 		const bool is_negative = (_big_endian == true ? (*_str == '1') : *(_str + _len) == '1');
 
 		Ty num = 0;
 		Ty tmp_num = 0;
 
-		for (std::size_t i = 0; i < _len; ++i)
+		for (db::size_t i = 0; i < _len; ++i)
 		{
 			if (_str[i] != '0' && _str[i] != '1') {
 				throw std::invalid_argument("Only binary strings");
 			}
 
 			if (_str[i] == '1') {
-				const auto _expo = (_big_endian == true ? (_len - i - 1) : i);
+				const db::size_t _expo = (_big_endian == true ? (_len - i - 1) : i);
 				if (_expo == 0) {
 					tmp_num += 1;
 				}
 				else {
-					tmp_num += static_cast<std::size_t>(2) << (_expo - 1);
+					tmp_num += static_cast<db::size_t>(2) << (_expo - 1);
 				}
 			}
 			else {
@@ -548,8 +739,8 @@ namespace db
 	}
 
 	// * Decimal string to number
-	template <class Ty = std::size_t>
-	constexpr inline Ty dston(const char* _str)
+	template <class Ty = db::size_t, class char_type>
+	constexpr inline Ty dston(const char_type* _str)
 	{
 		constexpr auto can_negative = !std::is_unsigned_v<Ty>;
 		constexpr auto num_max = std::numeric_limits<Ty>::max();
@@ -557,6 +748,7 @@ namespace db
 		const bool is_negative = (*_str == '-' ? ++_str : false);
 
 		Ty num = 0;
+		Ty tmp_num = 0;
 
 		while (*_str)
 		{
@@ -564,7 +756,7 @@ namespace db
 				throw std::invalid_argument("only number strings");
 			}
 
-			const Ty tmp_num = (num * 10) + (*_str++ - '0');
+			tmp_num = (num * 10) + (*_str++ - '0');
 
 			if (tmp_num < num) {
 				return num_max;
@@ -581,8 +773,8 @@ namespace db
 	}
 
 	// * Hex string to number
-	template <class Ty = std::size_t>
-	constexpr inline Ty hston(const char* _str)
+	template <class Ty = db::size_t, class char_type>
+	constexpr inline Ty hston(const char_type* _str)
 	{
 		constexpr auto can_negative = !std::is_unsigned_v<Ty>;
 		constexpr auto num_max = std::numeric_limits<Ty>::max();
@@ -634,17 +826,17 @@ namespace db
 	// Decimal
 	// Hexadecimal
 	// - not 100% accurate
-	template <class Ty = std::size_t>
-	constexpr inline Ty ston(const char* _str, const bool _big_endian_if_bin = true)
+	template <class Ty = db::size_t, class char_type>
+	constexpr inline Ty ston(const char_type* _str, const bool _big_endian_if_bin = true)
 	{
-		switch (guess_base(_str))
+		switch(db::guess_base<char_type>(_str))
 		{
 		case 2:
-			return db::bston<Ty>(_str, _big_endian_if_bin);
+			return db::bston<Ty, char_type>(_str, _big_endian_if_bin);
 		case 10:
-			return db::dston<Ty>(_str);
+			return db::dston<Ty, char_type>(_str);
 		case 16:
-			return db::hston<Ty>(_str);
+			return db::hston<Ty, char_type>(_str);
 		default:
 			return 0;
 		}
@@ -660,7 +852,7 @@ namespace db
 	{
 		fIter iter;
 		std::ptrdiff_t count = std::distance(_first, _last);
-		std::size_t step;
+		db::size_t step;
 
 		while (count > 0LL) {
 			step = count / 2ULL;
@@ -686,6 +878,7 @@ namespace db
 		db::binary_search<fIter, Ty>(_first, _last, _what, std::move(_cmp_func));
 	}
 
+#ifdef _XSTDDEF_
 	// * Binary search ( std::less )
 	template<class fIter, class Ty>
 	constexpr inline fIter binary_search(fIter _first, fIter _last, const Ty& _what)
@@ -699,11 +892,13 @@ namespace db
 	{
 		return db::binary_search<fIter, Ty>(_first, _last, _what, std::move(std::less<>{}));
 	}
+#endif
 }
 
 // OUTPUT
 namespace db
 {
+#ifdef _IOSTREAM_
 	// * Print vector
 	template <class ostream = std::ostream, class VecTy>
 	inline void print_vec(const std::vector<VecTy>& _vec, const char _delim = ',') noexcept
@@ -713,13 +908,13 @@ namespace db
 #else
 		if ((std::is_same_v<ostream, std::ostream>)) {
 #endif
-			for (std::size_t i = 0; i != _vec.size() - 1; ++i) {
+			for (db::size_t i = 0; i != _vec.size() - 1; ++i) {
 				std::cout << _vec.at(i) << _delim << ' ';
 			}
 			std::cout << _vec.back();
 		}
 		else {
-			for (std::size_t i = 0; i != _vec.size() - 1; ++i) {
+			for (db::size_t i = 0; i != _vec.size() - 1; ++i) {
 				std::wcout << _vec.at(i) << _delim << ' ';
 			}
 			std::wcout << _vec.back();
@@ -732,10 +927,10 @@ namespace db
 	{
 		db::print_vec(_vec, _delim);
 	}
-
+#endif
 	// * Lenght of printf output
-	template <std::size_t _Buffer = 1024, class... Args>
-	inline std::size_t scprintf(const char* _format, const Args&... _args) noexcept
+	template <db::size_t _Buffer = 1024, class... Args>
+	inline db::size_t scprintf(const char* _format, const Args&... _args) noexcept
 	{
 		char _buff[_Buffer + 1]{ char() };
 		snprintf(_buff, _Buffer + 1, _format, _args...);
@@ -743,8 +938,8 @@ namespace db
 	}
 
 	// * Lenght of printf output
-	template <std::size_t _Buffer = 1024, class... Args>
-	inline std::size_t scprintf(const char* _format, Args&&... _args) noexcept
+	template <db::size_t _Buffer = 1024, class... Args>
+	inline db::size_t scprintf(const char* _format, Args&&... _args) noexcept
 	{
 		return db::scprintf(_format, _args...);
 	}
